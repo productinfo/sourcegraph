@@ -3,6 +3,7 @@ package gitlab
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/url"
 	"strconv"
 	"testing"
@@ -82,6 +83,7 @@ func newMockGitLab(
 }
 
 func (m *mockGitLab) GetProject(c *gitlab.Client, ctx context.Context, op gitlab.GetProjectOp) (*gitlab.Project, error) {
+	log.Printf("### GetProject")
 	if _, ok := m.madeGetProject[c.OAuthToken]; !ok {
 		m.madeGetProject[c.OAuthToken] = map[gitlab.GetProjectOp]int{}
 	}
@@ -109,6 +111,7 @@ func (m *mockGitLab) GetProject(c *gitlab.Client, ctx context.Context, op gitlab
 }
 
 func (m *mockGitLab) ListTree(c *gitlab.Client, ctx context.Context, op gitlab.ListTreeOp) ([]*gitlab.Tree, error) {
+	log.Printf("### ListTree")
 	if _, ok := m.madeListTree[c.OAuthToken]; !ok {
 		m.madeListTree[c.OAuthToken] = map[gitlab.ListTreeOp]int{}
 	}
