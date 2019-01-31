@@ -11,6 +11,116 @@ import (
 	"github.com/sourcegraph/sourcegraph/pkg/extsvc/gitlab"
 )
 
+func Test_GitLab_RepoPerms(t *testing.T) {
+	// Mock the following scenario:
+	// - public projects begin with 99
+	// - internal projects begin with 98
+	// - private projects begin with the digit of the user that owns them (other users may have access)
+	// - u1 owns its own repositories and nothing else
+	// - u2 owns its own repos and has guest access to u1's
+	// - u3 owns its own repos and has full access to u1's and guest access to u2's
+	gitlabMock := newMockGitLab(t,
+		[]int{ // public projects
+			991,
+		},
+		[]int{ // internal projects
+			981,
+		},
+		map[int][2][]string{ // private projects
+			10: [2][]string{
+				[]string{ // guests
+					"u2",
+				},
+				[]string{ // content ("full access")
+					"u1",
+					"u3",
+				},
+			},
+			20: [2][]string{
+				[]string{
+					"u3",
+				},
+				[]string{
+					"u2",
+				},
+			},
+			30: [2][]string{
+				[]string{},
+				[]string{"u3"},
+			},
+		},
+		map[string]string{
+			"oauth-u1": "u1",
+			"oauth-u2": "u2",
+			"oauth-u3": "u3",
+		},
+	)
+	gitlab.MockGetProject = gitlabMock.GetProject
+	gitlab.MockListTree = gitlabMock.ListTree
+
+	tests := []GitLab_RepoPerms_Test{
+		{
+			description: "standard config",
+			op: GitLabOAuthAuthzProviderOp{
+				BaseURL: mustURL(t, "https://gitlab.mine"),
+			},
+			calls: []GitLab_RepoPerms_call{
+				{
+					description: "u1 user has expected perms",
+					account:     acct(1, "gitlab", "https://gitlab.mine/", "u1", "oauth-u1"),
+					repos: map[authz.Repo]struct{}{
+						repo("u1/repo1", gitlab.ServiceType, "https://gitlab.mine/", "10"):        {},
+						repo("u2/repo1", gitlab.ServiceType, "https://gitlab.mine/", "20"):        {},
+						repo("u3/repo1", gitlab.ServiceType, "https://gitlab.mine/", "30"):        {},
+						repo("internal/repo1", gitlab.ServiceType, "https://gitlab.mine/", "981"): {},
+						repo("public/repo1", gitlab.ServiceType, "https://gitlab.mine/", "991"):   {},
+					},
+					expPerms: map[api.RepoName]map[authz.Perm]bool{
+						"u1/repo1":       {authz.Read: true},
+						"internal/repo1": {authz.Read: true},
+						"public/repo1":   {authz.Read: true},
+					},
+				},
+				{
+					description: "u2 user has expected perms",
+					account:     acct(2, "gitlab", "https://gitlab.mine/", "u2", "oauth-u2"),
+					repos:       map[authz.Repo]struct{}{
+						// repo("u1/repo1", gitlab.ServiceType, "https://gitlab.mine/", "10"):        {},
+						// repo("u2/repo1", gitlab.ServiceType, "https://gitlab.mine/", "20"):        {},
+						// repo("u3/repo1", gitlab.ServiceType, "https://gitlab.mine/", "30"):        {},
+						// repo("internal/repo1", gitlab.ServiceType, "https://gitlab.mine/", "981"): {},
+						// repo("public/repo1", gitlab.ServiceType, "https://gitlab.mine/", "991"):   {},
+					},
+					expPerms: map[api.RepoName]map[authz.Perm]bool{
+						// "u1/repo1":       {authz.Read: true},
+						// "internal/repo1": {authz.Read: true},
+						// "public/repo1":   {authz.Read: true},
+					},
+				},
+				{
+					description: "u3 user has expected perms",
+					account:     acct(3, "gitlab", "https://gitlab.mine/", "u3", "oauth-u3"),
+					repos:       map[authz.Repo]struct{}{
+						// repo("u1/repo1", gitlab.ServiceType, "https://gitlab.mine/", "10"):        {},
+						// repo("u2/repo1", gitlab.ServiceType, "https://gitlab.mine/", "20"):        {},
+						// repo("u3/repo1", gitlab.ServiceType, "https://gitlab.mine/", "30"):        {},
+						// repo("internal/repo1", gitlab.ServiceType, "https://gitlab.mine/", "981"): {},
+						// repo("public/repo1", gitlab.ServiceType, "https://gitlab.mine/", "991"):   {},
+					},
+					expPerms: map[api.RepoName]map[authz.Perm]bool{
+						// "u1/repo1":       {authz.Read: true},
+						// "internal/repo1": {authz.Read: true},
+						// "public/repo1":   {authz.Read: true},
+					},
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		test.run(t)
+	}
+}
+
 // func Test_GitLab_RepoPerms(t *testing.T) {
 // 	gitlabMock := newMockGitLab(t,
 // 		[]int{ // Repos

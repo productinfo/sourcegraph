@@ -38,18 +38,17 @@ type mockGitLab struct {
 	// oauthToks is a map from OAuth token to GitLab user account ID
 	oauthToks map[string]string
 
-	// maxPerPage returns the max per_page value for the instance
-	maxPerPage int
+	// madeGetProject records what GetProject calls have been made. It's a map from oauth token -> GetProjectOp -> count.
+	madeGetProject map[string]map[gitlab.GetProjectOp]int
 
-	// madeProjectReqs records how many ListProjects requests were made by url string and oauth
-	// token
-	madeProjectReqs map[string]map[string]int
+	// madeListTree recores what ListTree calls have been made. It's a map from oauth token -> ListTreeOp -> count.
+	madeListTree map[string]map[gitlab.ListTreeOp]int
 }
 
 // newMockGitLab returns a new mockGitLab instance
 func newMockGitLab(
 	t *testing.T, publicProjs []int, internalProjs []int, privateProjs map[int][2][]string, // privateProjs maps from { projID -> [ guestUserIDs, contentUserIDs ] }
-	oauthToks map[string]string, maxPerPage int,
+	oauthToks map[string]string,
 ) mockGitLab {
 	projs := make(map[int]*gitlab.Project)
 	privateGuest := make(map[string][]int)
@@ -72,22 +71,30 @@ func newMockGitLab(
 		}
 	}
 	return mockGitLab{
-		t:               t,
-		projs:           projs,
-		privateGuest:    privateGuest,
-		privateRepo:     privateRepo,
-		oauthToks:       oauthToks,
-		maxPerPage:      maxPerPage,
-		madeProjectReqs: make(map[string]map[string]int),
+		t:              t,
+		projs:          projs,
+		privateGuest:   privateGuest,
+		privateRepo:    privateRepo,
+		oauthToks:      oauthToks,
+		madeGetProject: map[string]map[gitlab.GetProjectOp]int{},
+		madeListTree:   map[string]map[gitlab.ListTreeOp]int{},
 	}
 }
 
 func (m *mockGitLab) GetProject(c *gitlab.Client, ctx context.Context, op gitlab.GetProjectOp) (*gitlab.Project, error) {
+	if _, ok := m.madeGetProject[c.OAuthToken]; !ok {
+		m.madeGetProject[c.OAuthToken] = map[gitlab.GetProjectOp]int{}
+	}
+	m.madeGetProject[c.OAuthToken][op]++
+
 	proj, ok := m.projs[op.ID]
 	if !ok {
 		return nil, gitlab.ErrNotFound
 	}
 	if proj.Visibility == gitlab.Public {
+		return proj, nil
+	}
+	if c.OAuthToken != "" && proj.Visibility == gitlab.Internal {
 		return proj, nil
 	}
 
@@ -102,6 +109,11 @@ func (m *mockGitLab) GetProject(c *gitlab.Client, ctx context.Context, op gitlab
 }
 
 func (m *mockGitLab) ListTree(c *gitlab.Client, ctx context.Context, op gitlab.ListTreeOp) ([]*gitlab.Tree, error) {
+	if _, ok := m.madeListTree[c.OAuthToken]; !ok {
+		m.madeListTree[c.OAuthToken] = map[gitlab.ListTreeOp]int{}
+	}
+	m.madeListTree[c.OAuthToken][op]++
+
 	ret := []*gitlab.Tree{
 		{
 			ID:   "123",
@@ -117,6 +129,9 @@ func (m *mockGitLab) ListTree(c *gitlab.Client, ctx context.Context, op gitlab.L
 		return nil, gitlab.ErrNotFound
 	}
 	if proj.Visibility == gitlab.Public {
+		return ret, nil
+	}
+	if c.OAuthToken != "" && proj.Visibility == gitlab.Internal {
 		return ret, nil
 	}
 
