@@ -28,12 +28,12 @@ type mockGitLab struct {
 	// projs is a map of all projects on the instance, keyed by project ID
 	projs map[int]*gitlab.Project
 
+	// privateGuest is a map from GitLab user ID to list of metadata-accessible private project IDs on GitLab
+	privateGuest map[string][]int
+
 	// privateRepo is a map from GitLab user ID to list of repo-content-accessible private project IDs on GitLab.
 	// Projects in each list are also metadata-accessible.
 	privateRepo map[string][]int
-
-	// privateGuest is a map from GitLab user ID to list of metadata-accessible private project IDs on GitLab
-	privateGuest map[string][]int
 
 	// oauthToks is a map from OAuth token to GitLab user account ID
 	oauthToks map[string]string
@@ -48,125 +48,87 @@ type mockGitLab struct {
 
 // newMockGitLab returns a new mockGitLab instance
 func newMockGitLab(
-	t *testing.T, publicProjs []int, internalProjs []int, privateGuest, privateRepo map[int][]string,
+	t *testing.T, publicProjs []int, internalProjs []int, privateProjs map[int][2][]string, // privateProjs maps from { projID -> [ guestUserIDs, contentUserIDs ] }
 	oauthToks map[string]string, maxPerPage int,
 ) mockGitLab {
-	// NEXT
-
 	projs := make(map[int]*gitlab.Project)
-	privateACL := make(map[string][]int)
+	privateGuest := make(map[string][]int)
+	privateRepo := make(map[string][]int)
 	for _, p := range publicProjs {
 		projs[p] = &gitlab.Project{Visibility: gitlab.Public, ProjectCommon: gitlab.ProjectCommon{ID: p}}
 	}
 	for _, p := range internalProjs {
 		projs[p] = &gitlab.Project{Visibility: gitlab.Internal, ProjectCommon: gitlab.ProjectCommon{ID: p}}
 	}
-	for p, userIDs := range privateProjs {
+	for p, userAccess := range privateProjs {
 		projs[p] = &gitlab.Project{Visibility: gitlab.Private, ProjectCommon: gitlab.ProjectCommon{ID: p}}
-		for _, u := range userIDs {
-			privateACL[u] = append(privateACL[u], u)
+
+		guestUsers, contentUsers := userAccess[0], userAccess[1]
+		for _, u := range guestUsers {
+			privateGuest[u] = append(privateGuest[u], p)
+		}
+		for _, u := range contentUsers {
+			privateRepo[u] = append(privateRepo[u], p)
 		}
 	}
 	return mockGitLab{
 		t:               t,
 		projs:           projs,
-		privateACL:      privateACL,
+		privateGuest:    privateGuest,
+		privateRepo:     privateRepo,
 		oauthToks:       oauthToks,
 		maxPerPage:      maxPerPage,
 		madeProjectReqs: make(map[string]map[string]int),
 	}
 }
 
-func (m *mockGitLab) GetProject(c *gitlab.Client, ctx context.Context, op gitlab.GetProjectOp) (*Project, error) {
+func (m *mockGitLab) GetProject(c *gitlab.Client, ctx context.Context, op gitlab.GetProjectOp) (*gitlab.Project, error) {
 	proj, ok := m.projs[op.ID]
 	if !ok {
 		return nil, gitlab.ErrNotFound
 	}
-
 	if proj.Visibility == gitlab.Public {
 		return proj, nil
 	}
 
 	acctID := m.oauthToks[c.OAuthToken]
-	for _, accessibleProjID := range m.privateACL[acctID] {
+	for _, accessibleProjID := range append(m.privateGuest[acctID], m.privateRepo[acctID]...) {
 		if accessibleProjID == op.ID {
 			return proj, nil
 		}
 	}
+
 	return nil, gitlab.ErrNotFound
 }
 
-func (m *mockGitLab) ListTree(ctx context.Context, op gitlab.ListTreeOp) ([]*Tree, error) {
-	// TODO
+func (m *mockGitLab) ListTree(c *gitlab.Client, ctx context.Context, op gitlab.ListTreeOp) ([]*gitlab.Tree, error) {
+	ret := []*gitlab.Tree{
+		{
+			ID:   "123",
+			Name: "file.txt",
+			Type: "blob",
+			Path: "dir/file.txt",
+			Mode: "100644",
+		},
+	}
+
+	proj, ok := m.projs[op.ProjID]
+	if !ok {
+		return nil, gitlab.ErrNotFound
+	}
+	if proj.Visibility == gitlab.Public {
+		return ret, nil
+	}
+
+	acctID := m.oauthToks[c.OAuthToken]
+	for _, accessibleProjID := range m.privateRepo[acctID] {
+		if accessibleProjID == op.ProjID {
+			return ret, nil
+		}
+	}
+
+	return nil, gitlab.ErrNotFound
 }
-
-// func (m *mockGitLab) ListProjects(c *gitlab.Client, ctx context.Context, urlStr string) (proj []*gitlab.Project, nextPageURL *string, err error) {
-// 	if m.madeProjectReqs[urlStr] == nil {
-// 		m.madeProjectReqs[urlStr] = make(map[string]int)
-// 	}
-// 	m.madeProjectReqs[urlStr][c.OAuthToken]++
-
-// 	u, err := url.Parse(urlStr)
-// 	if err != nil {
-// 		m.t.Fatalf("could not parse ListProjects urlStr %q: %s", urlStr, err)
-// 	}
-// 	acceptedQ := map[string]struct{}{"page": {}, "per_page": {}}
-// 	for k := range u.Query() {
-// 		if _, ok := acceptedQ[k]; !ok {
-// 			m.t.Fatalf("mockGitLab unable to handle urlStr %q", urlStr)
-// 		}
-// 	}
-
-// 	acctID := m.oauthToks[c.OAuthToken]
-// 	var repoIDs []int
-// 	if acctID == "" {
-// 		repoIDs = m.acls["PUBLIC"]
-// 	} else {
-// 		repoIDs = m.acls[acctID]
-// 	}
-
-// 	allProjs := make([]*gitlab.Project, len(repoIDs))
-// 	for i, repoID := range repoIDs {
-// 		proj, ok := m.projs[repoID]
-// 		if !ok {
-// 			m.t.Fatalf("Dangling project reference in mockGitLab: %d", repoID)
-// 		}
-// 		allProjs[i] = proj
-// 	}
-
-// 	// pagination
-// 	perPage, err := getIntOrDefault(u.Query().Get("per_page"), m.maxPerPage)
-// 	if err != nil {
-// 		return nil, nil, err
-// 	}
-// 	if perPage > m.maxPerPage {
-// 		perPage = m.maxPerPage
-// 	}
-// 	page, err := getIntOrDefault(u.Query().Get("page"), 1)
-// 	if err != nil {
-// 		return nil, nil, err
-// 	}
-// 	p := page - 1
-// 	var (
-// 		pagedProjs []*gitlab.Project
-// 	)
-// 	if perPage*p > len(allProjs)-1 {
-// 		pagedProjs = nil
-// 	} else if perPage*(p+1) > len(allProjs)-1 {
-// 		pagedProjs = allProjs[perPage*p:]
-// 	} else {
-// 		pagedProjs = allProjs[perPage*p : perPage*(p+1)]
-// 		if perPage*(p+1) <= len(allProjs)-1 {
-// 			newU := *u
-// 			q := u.Query()
-// 			q.Set("page", strconv.Itoa(page+1))
-// 			newU.RawQuery = q.Encode()
-// 			s := newU.String()
-// 			nextPageURL = &s
-// 		}
-// 	}
-// 	return pagedProjs, nextPageURL, nil
-// }
 
 type mockCache map[string]string
 
