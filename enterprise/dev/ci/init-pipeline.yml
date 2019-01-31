@@ -1,8 +1,39 @@
+# Based on
+# BUILDKITE_BRANCH=docker-images/symbols go run enterprise/dev/ci/gen-pipeline.go
+# BUILDKITE_BRANCH=master go run enterprise/dev/ci/gen-pipeline.go
 steps:
-  - command: |
-      GO111MODULE=on go run ./enterprise/dev/ci/gen-pipeline.go | tee ./pipeline.yml
-      buildkite-agent pipeline upload ./pipeline.yml
-    label: ':pipeline:'
-    plugins:
-      gopath-checkout#v1.0.1:
-        import: github.com/sourcegraph/sourcegraph
+- command:
+  - echo "Building symbols..."
+  - cmd/symbols/build.sh
+  #- docker push sourcegraph/symbols:00000_2019-01-31_1234567
+  #- docker tag sourcegraph/symbols:00000_2019-01-31_1234567 sourcegraph/symbols:insiders
+  #- docker push sourcegraph/symbols:insiders
+  env:
+    ENTERPRISE: "1"
+    FORCE_COLOR: "1"
+    GO111MODULE: "on"
+    IMAGE: sourcegraph/symbols:00000_2019-01-31_1234567
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+    VERSION: 00000_2019-01-31_1234567
+  label: ':docker:'
+  plugins:
+    gopath-checkout#v1.0.1:
+      import: github.com/sourcegraph/sourcegraph
+- command:
+  - echo "Building server..."
+  - pushd enterprise
+  - cmd/server/pre-build.sh
+  - cmd/server/build.sh
+  #- docker tag sourcegraph/server:00000_2019-01-31_1234567 sourcegraph/server:insiders
+  #- docker push sourcegraph/server:insiders
+  env:
+    ENTERPRISE: "1"
+    FORCE_COLOR: "1"
+    GO111MODULE: "on"
+    IMAGE: sourcegraph/server:00000_2019-01-31_1234567
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+    VERSION: 00000_2019-01-31_1234567
+  label: ':docker:'
+  plugins:
+    gopath-checkout#v1.0.1:
+      import: github.com/sourcegraph/sourcegraph
